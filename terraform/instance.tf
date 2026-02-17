@@ -18,6 +18,6 @@ resource "aws_instance" "web" {
   user_data = file("${path.module}/../UserdataScript-phase-2.sh")
 
   tags = {
-    Name = "StudentApp-Phase2"
+    Name = "StudentApp-phase-1"
   }
 }
