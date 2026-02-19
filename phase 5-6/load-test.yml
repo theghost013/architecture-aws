@@ -1,0 +1,15 @@
+config:
+  target: "http://localhost" # Sera remplacé par l'IP de l'EC2 dans le pipeline
+  phases:
+    - duration: 60
+      arrivalRate: 5
+      name: Warm up
+    - duration: 120
+      arrivalRate: 10
+      rampTo: 50
+      name: Load test
+scenarios:
+  - name: "Simple GET request"
+    flow:
+      - get:
+          url: "/"

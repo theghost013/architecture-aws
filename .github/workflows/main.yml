@@ -1,0 +1,206 @@
+name: CI/CD Pipeline - Phase 5-6
+
+on:
+  push:
+    branches: [ phase-5 ]
+  pull_request:
+    branches: [ phase-5 ]
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: student-app-repo
+  ECS_CLUSTER: student-app-cluster
+  ECS_SERVICE: student-app-service
+
+jobs:
+  build-and-test:
+    name: Build and Quality Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        run: |
+          cd "phase 5-6/web"
+          npm install
+
+      - name: Run ESLint (Quality Check)
+        run: |
+          cd "phase 5-6/web"
+          npm run lint
+
+  terraform-check:
+    name: Terraform Quality Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+
+      - name: Terraform Init
+        run: |
+          cd "phase 5-6/terraform"
+          terraform init
+
+      - name: Terraform Format Check
+        run: |
+          cd "phase 5-6/terraform"
+          terraform fmt -check
+
+      - name: Terraform Validate
+        run: |
+          cd "phase 5-6/terraform"
+          terraform validate
+
+      - name: Terraform Plan
+        run: |
+          cd "phase 5-6/terraform"
+          terraform plan
+
+  docker-packaging:
+    name: Packaging and Push to ECR
+    needs: [build-and-test, terraform-check]
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.build-image.outputs.image }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Build, tag, and push image to Amazon ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY:latest "phase 5-6/web"
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+  deploy:
+    name: Remote Docker Deployment
+    needs: [docker-packaging, terraform-check]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get Node IP and Database Secrets
+        id: vars
+        run: |
+          # Récupération de l'IP du noeud ECS (via tags Name=ecs-node)
+          NODE_IP=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=ecs-node" "Name=instance-state-name,Values=running" \
+            --query 'Reservations[0].Instances[0].PublicIpAddress' \
+            --output text)
+          
+          if [ "$NODE_IP" == "None" ] || [ -z "$NODE_IP" ]; then
+            echo "Error: No running ECS node found."
+            exit 1
+          fi
+          echo "node_ip=$NODE_IP" >> $GITHUB_OUTPUT
+          echo "Connecting to node: $NODE_IP"
+
+          # Récupération des secrets pour la DB
+          SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id Mydbsecret --query SecretString --output text)
+          echo "APP_DB_HOST=$(echo $SECRET_JSON | jq -r .host)" >> $GITHUB_ENV
+          echo "APP_DB_USER=$(echo $SECRET_JSON | jq -r .user)" >> $GITHUB_ENV
+          echo "APP_DB_PASSWORD=$(echo $SECRET_JSON | jq -r .password)" >> $GITHUB_ENV
+          echo "APP_DB_NAME=$(echo $SECRET_JSON | jq -r .db)" >> $GITHUB_ENV
+
+      - name: Login to Amazon ECR on Remote Host
+        env:
+          DOCKER_HOST: tcp://${{ steps.vars.outputs.node_ip }}:2375
+        run: |
+          aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin 516225684264.dkr.ecr.us-east-1.amazonaws.com
+
+      - name: Deploy Container via Remote Docker
+        env:
+          DOCKER_HOST: tcp://${{ steps.vars.outputs.node_ip }}:2375
+          IMAGE: ${{ needs.docker-packaging.outputs.image }}
+        run: |
+          echo "Deploying $IMAGE to ${{ steps.vars.outputs.node_ip }}"
+          
+          # Nettoyage de l'ancien conteneur
+          docker stop student-app || true
+          docker rm student-app || true
+          
+          # Lancement du nouveau conteneur avec les secrets injectés
+          docker run -d \
+            --name student-app \
+            -p 3000:3000 \
+            -e APP_PORT=3000 \
+            -e APP_DB_HOST=${{ env.APP_DB_HOST }} \
+            -e APP_DB_USER=${{ env.APP_DB_USER }} \
+            -e APP_DB_PASSWORD='${{ env.APP_DB_PASSWORD }}' \
+            -e APP_DB_NAME=${{ env.APP_DB_NAME }} \
+            --restart always \
+            $IMAGE
+
+  load-test:
+    name: Load Testing
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install Artillery
+        run: npm install -g artillery
+
+      - name: Run Load Test
+        run: |
+          # Récupération de l'URL de l'ALB via AWS CLI
+          ALB_URL=$(aws elbv2 describe-load-balancers --names student-app-alb --query 'LoadBalancers[0].DNSName' --output text)
+          ALB_URL="http://$ALB_URL"
+          echo "Targeting ALB: $ALB_URL"
+          
+          # On remplace localhost par l'URL réelle dans le fichier de config
+          sed -i "s|target:.*|target: \"$ALB_URL\"|g" "phase 5-6/load-test.yml"
+          artillery run "phase 5-6/load-test.yml"
+
