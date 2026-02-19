@@ -65,8 +65,8 @@ data "aws_iam_role" "ecs_task_execution" {
 
 resource "aws_ecs_task_definition" "app" {
   family                   = "student-app"
-  network_mode             = "awsvpc"
-  requires_compatibilities = ["FARGATE"]
+  network_mode             = "bridge"
+  requires_compatibilities = ["EC2"] # Changement ici
   cpu                      = "256"
   memory                   = "512"
   execution_role_arn       = data.aws_iam_role.ecs_task_execution.arn
@@ -77,6 +77,7 @@ resource "aws_ecs_task_definition" "app" {
     image = "${aws_ecr_repository.app.repository_url}:latest"
     portMappings = [{
       containerPort = 3000
+      hostPort      = 3000 # Ajout du hostPort pour le mode bridge
       protocol      = "tcp"
     }]
     environment = [
@@ -101,20 +102,16 @@ resource "aws_cloudwatch_log_group" "app" {
 }
 
 # ─── ECS Service ──────────────────────────────────────────────────────────────
-# Lance 1 conteneur en permanence, le raccorde à l'ALB
+# Lance 1 conteneur en permanence sur EC2
 
 resource "aws_ecs_service" "app" {
   name            = "student-app-service"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.app.arn
   desired_count   = 1
-  launch_type     = "FARGATE"
+  launch_type     = "EC2" # Changement ici : de FARGATE à EC2
 
-  network_configuration {
-    subnets          = [aws_subnet.web.id, aws_subnet.web_b.id]
-    security_groups  = [aws_security_group.web.id]
-    assign_public_ip = true
-  }
+  # Pas de network_configuration en mode bridge (le conteneur utilise le réseau de l'hôte)
 
   load_balancer {
     target_group_arn = aws_lb_target_group.app.arn

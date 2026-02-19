@@ -10,11 +10,11 @@ resource "aws_lb" "app" {
 
 # Target Group : liste des conteneurs qui reçoivent le trafic
 resource "aws_lb_target_group" "app" {
-  name        = "student-app-tg"
+  name        = "student-app-v3-tg" # Nouveau nom et lifecycle pour éviter ResourceInUse
   port        = 3000
   protocol    = "HTTP"
   vpc_id      = aws_vpc.main.id
-  target_type = "ip"
+  target_type = "instance" # Changement ici : de ip à instance
 
   health_check {
     path                = "/"
@@ -24,6 +24,10 @@ resource "aws_lb_target_group" "app" {
   }
 
   tags = { Name = "student-app-tg" }
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 # Listener HTTP sur le port 80
@@ -35,5 +39,9 @@ resource "aws_lb_listener" "http" {
   default_action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.app.arn
+  }
+
+  lifecycle {
+    create_before_destroy = true
   }
 }
