@@ -131,6 +131,35 @@ jobs:
           terraform init
 
       - name: Terraform Apply
+        id: apply
         run: |
           cd "phase 5-6/terraform"
           terraform apply -auto-approve -var="container_image_tag=${{ github.sha }}"
+          echo "alb_url=$(terraform output -raw alb_url)" >> $GITHUB_OUTPUT
+
+  load-test:
+    name: Load Testing
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install Artillery
+        run: npm install -g artillery
+
+      - name: Run Load Test
+        run: |
+          ALB_URL="${{ needs.deploy.steps.apply.outputs.alb_url }}"
+          echo "Targeting ALB: $ALB_URL"
+          # On remplace localhost par l'URL réelle dans le fichier de config
+          sed -i "s|target:.*|target: \"$ALB_URL\"|g" "phase 5-6/load-test.yml"
+          artillery run "phase 5-6/load-test.yml"
