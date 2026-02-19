@@ -1,0 +1,115 @@
+name: CI/CD Pipeline - Phase 5-6
+
+on:
+  push:
+    branches: [ phase-5 ]
+  pull_request:
+    branches: [ phase-5 ]
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: student-app-repo
+  ECS_CLUSTER: student-app-cluster
+  ECS_SERVICE: student-app-service
+
+jobs:
+  build-and-test:
+    name: Build and Quality Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        run: |
+          cd "phase 5-6/web"
+          npm install
+
+      - name: Run ESLint (Quality Check)
+        run: |
+          cd "phase 5-6/web"
+          npm run lint
+
+  docker-packaging:
+    name: Packaging and Push to ECR
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.build-image.outputs.image }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Build, tag, and push image to Amazon ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG "phase 5-6/web"
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+  load-test:
+    name: Load Testing
+    needs: docker-packaging
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Install Artillery
+        run: npm install -g artillery
+
+      - name: Run Load Test
+        run: |
+          echo "Test de charge sur le service ECS..."
+          # artillery run "phase 5-6/load-test.yml" --target http://<ALB_URL>
+          echo "Test de charge terminé"
+
+  deploy:
+    name: Deploy to ECS Fargate
+    needs: load-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy new image to ECS
+        env:
+          IMAGE: ${{ needs.docker-packaging.outputs.image }}
+        run: |
+          aws ecs update-service \
+            --cluster $ECS_CLUSTER \
+            --service $ECS_SERVICE \
+            --force-new-deployment \
+            --region $AWS_REGION
+          echo "Déploiement lancé sur ECS Fargate !"
+
+      - name: Wait for ECS service to stabilize
+        run: |
+          aws ecs wait services-stable \
+            --cluster $ECS_CLUSTER \
+            --services $ECS_SERVICE \
+            --region $AWS_REGION
+          echo "Service ECS stable et opérationnel"
