@@ -1,11 +1,3 @@
-# ─── IAM Instance Profile ───────────────────────────────────────────────────
-# Nécessaire pour que les instances EC2 puissent s'enregistrer auprès d'ECS.
-# On utilise le LabRole existant comme d'habitude.
-resource "aws_iam_instance_profile" "ecs_node" {
-  name = "ecs-node-profile"
-  role = "LabRole"
-}
-
 # ─── Data : AMI optimisée pour ECS ──────────────────────────────────────────
 data "aws_ssm_parameter" "ecs_optimized_ami" {
   name = "/aws/service/ecs/optimized-ami/amazon-linux-2/recommended"
@@ -15,10 +7,10 @@ data "aws_ssm_parameter" "ecs_optimized_ami" {
 resource "aws_launch_template" "ecs_nodes" {
   name_prefix   = "ecs-node-"
   image_id      = jsondecode(data.aws_ssm_parameter.ecs_optimized_ami.value).image_id
-  instance_type = "t3.medium" # Un peu plus costaud que t2.micro pour ECS
+  instance_type = "t2.micro" # Un peu plus costaud que t2.micro pour ECS
 
   iam_instance_profile {
-    name = aws_iam_instance_profile.ecs_node.name
+    name = "LabInstanceProfile" # Utilisation du profil pré-existant qui a accès aux secrets
   }
 
   network_interfaces {

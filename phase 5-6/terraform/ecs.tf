@@ -60,6 +60,12 @@ data "aws_iam_role" "ecs_task_execution" {
   name = "LabRole"
 }
 
+variable "container_image_tag" {
+  description = "Tag of the docker image to deploy"
+  type        = string
+  default     = "latest"
+}
+
 # ─── ECS Task Definition ──────────────────────────────────────────────────────
 # Décrit le conteneur : quelle image, combien de ressources, quelles variables
 
@@ -74,15 +80,32 @@ resource "aws_ecs_task_definition" "app" {
 
   container_definitions = jsonencode([{
     name  = "student-app"
-    image = "${aws_ecr_repository.app.repository_url}:latest"
+    image = "${aws_ecr_repository.app.repository_url}:${var.container_image_tag}"
     portMappings = [{
       containerPort = 3000
       hostPort      = 3000 # Ajout du hostPort pour le mode bridge
       protocol      = "tcp"
     }]
     environment = [
-      { name = "APP_PORT", value = "3000" },
-      { name = "APP_DB_HOST", value = aws_db_instance.default.address }
+      { name = "APP_PORT", value = "3000" }
+    ]
+    secrets = [
+      {
+        name      = "APP_DB_HOST"
+        valueFrom = "${aws_secretsmanager_secret.db_password.arn}:host::"
+      },
+      {
+        name      = "APP_DB_USER"
+        valueFrom = "${aws_secretsmanager_secret.db_password.arn}:user::"
+      },
+      {
+        name      = "APP_DB_PASSWORD"
+        valueFrom = "${aws_secretsmanager_secret.db_password.arn}:password::"
+      },
+      {
+        name      = "APP_DB_NAME"
+        valueFrom = "${aws_secretsmanager_secret.db_password.arn}:db::"
+      }
     ]
     logConfiguration = {
       logDriver = "awslogs"
