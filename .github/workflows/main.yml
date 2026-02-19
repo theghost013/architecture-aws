@@ -50,7 +50,8 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
 
       - name: Login to Amazon ECR
         id: login-ecr
@@ -80,7 +81,7 @@ jobs:
       - name: Run Load Test
         run: |
           echo "Test de charge sur le service ECS..."
-          # artillery run "phase 5-6/load-test.yml" --target http://<ALB_URL>
+          # artillery run "phase 5-6/load-test.yml"
           echo "Test de charge terminé"
 
   deploy:
@@ -93,7 +94,8 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
 
       - name: Deploy new image to ECS
         env:
@@ -103,7 +105,7 @@ jobs:
             --cluster $ECS_CLUSTER \
             --service $ECS_SERVICE \
             --force-new-deployment \
-            --region $AWS_REGION
+            --region us-east-1
           echo "Déploiement lancé sur ECS Fargate !"
 
       - name: Wait for ECS service to stabilize
@@ -111,5 +113,5 @@ jobs:
           aws ecs wait services-stable \
             --cluster $ECS_CLUSTER \
             --services $ECS_SERVICE \
-            --region $AWS_REGION
+            --region us-east-1
           echo "Service ECS stable et opérationnel"
