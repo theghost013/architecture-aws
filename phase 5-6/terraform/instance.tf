@@ -64,7 +64,7 @@ resource "aws_ecs_capacity_provider" "ecs_ec2" {
   name = "student-app-cp" # Correction : ne doit pas commencer par ecs/aws/fargate
 
   auto_scaling_group_provider {
-    auto_scaling_group_arn = aws_autoscaling_group.ecs_nodes.arn
+    auto_scaling_group_arn         = aws_autoscaling_group.ecs_nodes.arn
     managed_termination_protection = "DISABLED"
 
     managed_scaling {

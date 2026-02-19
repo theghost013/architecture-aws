@@ -81,7 +81,7 @@ resource "aws_ecs_task_definition" "app" {
       protocol      = "tcp"
     }]
     environment = [
-      { name = "APP_PORT",    value = "3000" },
+      { name = "APP_PORT", value = "3000" },
       { name = "APP_DB_HOST", value = aws_db_instance.default.address }
     ]
     logConfiguration = {
