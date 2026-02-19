@@ -1,67 +1,43 @@
-resource "aws_security_group" "web" {
-  name        = "student-app-web-sg"
-  description = "Allow HTTP and SSH"
-  vpc_id      = aws_vpc.main.id
-
-  ingress {
-    description = "HTTP from anywhere"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    description = "SSH from anywhere"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = { Name = "student-app-web-sg" }
+# Hardcoded AMI ID pour Ubuntu 22.04 LTS (us-east-1)
+variable "ami_id" {
+  default = "ami-0c7217cdde317cfec"
 }
 
-data "aws_ssm_parameter" "ubuntu_ami" {
-  name = "/aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id"
+# 1. Le modèle de lancement (Launch Template)
+resource "aws_launch_template" "web_lt" {
+  name_prefix   = "student-app-lt-"
+  image_id      = var.ami_id
+  instance_type = "t3.micro"
+  key_name      = "vockey"
+
+  network_interfaces {
+    associate_public_ip_address = true
+    security_groups             = [aws_security_group.web.id]
+  }
+
+  # ATTENTION : Vérifie bien que ton fichier .sh est dans le même dossier
+  user_data = filebase64("${path.module}/../UserdataScript-phase-2.sh")
+
+  tag_specifications {
+    resource_type = "instance"
+    tags = {
+      Name = "StudentApp-ASG-Instance"
+    }
+  }
 }
 
-# ─── Phase 1 : instance avec MySQL local ───────────────────────────────────────
+# 2. Le groupe d'Auto Scaling (ASG)
+resource "aws_autoscaling_group" "web_asg" {
+  name                = "student-app-asg"
+  desired_capacity    = 2
+  max_size            = 5
+  min_size            = 2
+  
+  vpc_zone_identifier = [aws_subnet.web.id, aws_subnet.web_b.id]
+  target_group_arns   = [aws_lb_target_group.web_tg.arn]
 
-resource "aws_instance" "web_phase1" {
-  ami                    = data.aws_ssm_parameter.ubuntu_ami.value
-  instance_type          = "t2.micro"
-  subnet_id              = aws_subnet.web.id
-  key_name               = "vockey"
-  vpc_security_group_ids = [aws_security_group.web.id]
-  iam_instance_profile   = "LabInstanceProfile"
-
-  user_data = file("${path.module}/../../phase 1/UserdataScript-phase-2.sh")
-
-  tags = { Name = "StudentApp-phase-1" }
-}
-
-# ─── Phase 2 : instance connectée au RDS ───────────────────────────────────────
-
-resource "aws_instance" "web" {
-  ami                    = data.aws_ssm_parameter.ubuntu_ami.value
-  instance_type          = "t2.micro"
-  subnet_id              = aws_subnet.web.id
-  key_name               = "vockey"
-  vpc_security_group_ids = [aws_security_group.web.id]
-  iam_instance_profile   = "LabInstanceProfile"
-
-  user_data = base64encode(templatefile("${path.module}/../UserdataScript-phase-2.sh", {
-    rds_endpoint = aws_db_instance.default.address
-    secret_name  = aws_secretsmanager_secret.db_password.name
-  }))
-
-  tags = { Name = "StudentApp-phase-2" }
+  launch_template {
+    id      = aws_launch_template.web_lt.id
+    version = "$Latest"
+  }
 }
