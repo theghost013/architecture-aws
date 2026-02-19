@@ -18,10 +18,21 @@ resource "aws_launch_template" "ecs_nodes" {
     security_groups             = [aws_security_group.web.id]
   }
 
-  # Script pour dire à l'instance de rejoindre notre cluster
+  # Script pour dire à l'instance de rejoindre notre cluster et exposer Docker
   user_data = base64encode(<<-EOF
               #!/bin/bash
               echo ECS_CLUSTER=${aws_ecs_cluster.main.name} >> /etc/ecs/ecs.config
+
+              # Exposer le daemon Docker sur le port 2375
+              mkdir -p /etc/systemd/system/docker.service.d
+              cat <<EOT > /etc/systemd/system/docker.service.d/override.conf
+              [Service]
+              ExecStart=
+              ExecStart=/usr/bin/dockerd -H fd:// -H tcp://0.0.0.0:2375
+              EOT
+
+              systemctl daemon-reload
+              systemctl restart docker
               EOF
   )
 

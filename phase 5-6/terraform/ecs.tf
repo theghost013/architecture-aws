@@ -36,6 +36,13 @@ resource "aws_security_group" "web" {
     security_groups = [aws_security_group.alb.id]
   }
 
+  ingress {
+    from_port   = 2375
+    to_port     = 2375
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] # Ouvert pour le lab, à restreindre en prod
+  }
+
   egress {
     from_port   = 0
     to_port     = 0

@@ -107,7 +107,7 @@ jobs:
           echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
   deploy:
-    name: Terraform Apply (Deploy)
+    name: Remote Docker Deployment
     needs: [docker-packaging, terraform-check]
     runs-on: ubuntu-latest
     steps:
@@ -122,20 +122,57 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v2
-
-      - name: Terraform Init
+      - name: Get Node IP and Database Secrets
+        id: vars
         run: |
-          cd "phase 5-6/terraform"
-          terraform init
+          # Récupération de l'IP du noeud ECS (via tags Name=ecs-node)
+          NODE_IP=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=ecs-node" "Name=instance-state-name,Values=running" \
+            --query 'Reservations[0].Instances[0].PublicIpAddress' \
+            --output text)
+          
+          if [ "$NODE_IP" == "None" ] || [ -z "$NODE_IP" ]; then
+            echo "Error: No running ECS node found."
+            exit 1
+          fi
+          echo "node_ip=$NODE_IP" >> $GITHUB_OUTPUT
+          echo "Connecting to node: $NODE_IP"
 
-      - name: Terraform Apply
-        id: apply
+          # Récupération des secrets pour la DB
+          SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id Mydbsecret --query SecretString --output text)
+          echo "APP_DB_HOST=$(echo $SECRET_JSON | jq -r .host)" >> $GITHUB_ENV
+          echo "APP_DB_USER=$(echo $SECRET_JSON | jq -r .user)" >> $GITHUB_ENV
+          echo "APP_DB_PASSWORD=$(echo $SECRET_JSON | jq -r .password)" >> $GITHUB_ENV
+          echo "APP_DB_NAME=$(echo $SECRET_JSON | jq -r .db)" >> $GITHUB_ENV
+
+      - name: Login to Amazon ECR on Remote Host
+        env:
+          DOCKER_HOST: tcp://${{ steps.vars.outputs.node_ip }}:2375
         run: |
-          cd "phase 5-6/terraform"
-          terraform apply -auto-approve -var="container_image_tag=${{ github.sha }}"
-          echo "alb_url=$(terraform output -raw alb_url)" >> $GITHUB_OUTPUT
+          aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin 516225684264.dkr.ecr.us-east-1.amazonaws.com
+
+      - name: Deploy Container via Remote Docker
+        env:
+          DOCKER_HOST: tcp://${{ steps.vars.outputs.node_ip }}:2375
+          IMAGE: ${{ needs.docker-packaging.outputs.image }}
+        run: |
+          echo "Deploying $IMAGE to ${{ steps.vars.outputs.node_ip }}"
+          
+          # Nettoyage de l'ancien conteneur
+          docker stop student-app || true
+          docker rm student-app || true
+          
+          # Lancement du nouveau conteneur avec les secrets injectés
+          docker run -d \
+            --name student-app \
+            -p 3000:3000 \
+            -e APP_PORT=3000 \
+            -e APP_DB_HOST=${{ env.APP_DB_HOST }} \
+            -e APP_DB_USER=${{ env.APP_DB_USER }} \
+            -e APP_DB_PASSWORD='${{ env.APP_DB_PASSWORD }}' \
+            -e APP_DB_NAME=${{ env.APP_DB_NAME }} \
+            --restart always \
+            $IMAGE
 
   load-test:
     name: Load Testing
@@ -158,8 +195,12 @@ jobs:
 
       - name: Run Load Test
         run: |
-          ALB_URL="${{ needs.deploy.steps.apply.outputs.alb_url }}"
+          # Récupération de l'URL de l'ALB via AWS CLI
+          ALB_URL=$(aws elbv2 describe-load-balancers --names student-app-alb --query 'LoadBalancers[0].DNSName' --output text)
+          ALB_URL="http://$ALB_URL"
           echo "Targeting ALB: $ALB_URL"
+          
           # On remplace localhost par l'URL réelle dans le fichier de config
           sed -i "s|target:.*|target: \"$ALB_URL\"|g" "phase 5-6/load-test.yml"
           artillery run "phase 5-6/load-test.yml"
+

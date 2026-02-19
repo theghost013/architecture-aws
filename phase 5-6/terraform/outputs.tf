@@ -26,3 +26,18 @@ output "db_password" {
   value     = random_password.db_password.result
   sensitive = true
 }
+
+# Récupération de l'IP publique du noeud ECS (EC2)
+data "aws_instances" "ecs_nodes" {
+  instance_tags = {
+    "AmazonECSManaged" = "true"
+  }
+  instance_state_names = ["running"]
+
+  depends_on = [aws_autoscaling_group.ecs_nodes]
+}
+
+output "ecs_node_public_ip" {
+  description = "IP publique du premier noeud ECS pour accès Docker distant"
+  value       = data.aws_instances.ecs_nodes.public_ips[0]
+}
